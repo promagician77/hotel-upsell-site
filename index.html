@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Upsell desk: hotel upsell automation demo</title>
+<meta name="description" content="Working demo of hotel upsell automation: PMS webhooks, scheduled offer emails, a guest offer page, folio charges with retries, and the reasons behind every offer.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/Newsreader-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/SchibstedGrotesk-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#desk"><b>Upsell desk</b><span>Hotel Meridiana, Lisbon (fictional)</span></a>
+  <nav aria-label="Sections"><a href="#desk">Demo</a><a href="#reliability">Reliability</a><a href="#timing">Timing</a><a href="#build">How it is built</a><a href="#measured">Measured</a></nav>
+</header>
+<main>
+<div class="wrap">
+  <section class="hero" aria-labelledby="h1">
+    <h1 id="h1">Breakfast, parking, upgrades and late checkout, offered to each guest when it fits.</h1>
+    <div>
+      <p>A working upsell system for a 42-room hotel: bookings arrive from the PMS by webhook, offer emails go out in the guest’s language at the right local time, the guest books on a short offer page, and every extra lands on the folio exactly once. The hotel console beside it shows why each offer is made or held back.</p>
+      <p class="facts"><span><b>392</b> reservations loaded</span><span><b>4</b> guest languages</span><span><b>18/18</b> reliability cases pass</span></p>
+    </div>
+  </section>
+  <div class="controls" role="group" aria-label="Demo controls">
+    <div class="group"><span class="label">Play</span>
+      <button class="btn primary" type="button" data-play="journey">A guest books extras</button>
+      <button class="btn" type="button" data-play="pms">Messy PMS webhooks</button>
+      <button class="btn" type="button" id="reset">Reset</button></div>
+    <div class="group"><span class="label">Add to the guest journey</span>
+      <button class="btn" type="button" data-flag="pmsDown" aria-pressed="false">PMS down while booking</button>
+      <button class="btn" type="button" data-flag="race" aria-pressed="false">Last parking space, two guests at once</button></div>
+    <p class="status-line" id="run-status" role="status" aria-live="polite"></p>
+  </div>
+  <div class="desk" id="desk">
+    <section class="pane" aria-labelledby="h-arr">
+      <header><h2 id="h-arr">Arrivals</h2><span id="arrivals-count"></span></header>
+      <div class="clock" id="clock"></div>
+      <ul class="arrivals" id="arrivals" aria-label="Upcoming arrivals"></ul>
+      <div class="pms" role="group" aria-label="Send a PMS event">
+        <p>Send a PMS webhook</p>
+        <button class="btn small" type="button" data-pms="new">New booking</button>
+        <button class="btn small" type="button" data-pms="dup">New booking, sent 3 times</button>
+        <button class="btn small" type="button" data-pms="cancel-first">Cancellation arrives first</button>
+        <button class="btn small" type="button" data-pms="change">Move this stay by a day</button>
+        <button class="btn small" type="button" data-pms="cancel">Cancel this stay</button>
+        <button class="btn small" type="button" data-pms="forged">Forged webhook</button>
+      </div>
+    </section>
+    <section class="pane guest" aria-labelledby="h-guest">
+      <header><h2 id="h-guest">What the guest sees</h2><span id="guest-who"></span></header>
+      <nav class="bar" id="guest-tabs" aria-label="Guest views"></nav>
+      <div class="view" id="guest-view" aria-live="polite"></div>
+    </section>
+    <section class="pane ops" aria-labelledby="h-ops">
+      <header><h2 id="h-ops">What the hotel sees</h2><span>operations console</span></header>
+      <div class="tabs" id="ops-tabs" role="tablist" aria-label="Console sections"></div>
+      <div class="body" id="ops-body"></div>
+    </section>
+  </div>
+</div>
+
+<section class="block" id="reliability" aria-labelledby="h-rel"><div class="wrap">
+  <h2 id="h-rel">Reliable means no double emails, no double charges, no oversold parking.</h2>
+  <p class="lede">PMS webhooks can arrive twice and out of order; Apaleo’s own guide says a cancellation can come before the booking it cancels. Guests double-click, PMS APIs time out after doing the work, and two guests can want the last space at once. Each of these was run against the service over real HTTP.</p>
+  <div class="stats">
+    <div class="stat"><b>1 vs 5</b><span>bookings for the last parking space, with the one-step counter versus check-then-book</span></div>
+    <div class="stat"><b>1 vs 2</b><span>folio charges after a PMS timeout and retry, with and without the PMS honouring the idempotency key</span></div>
+    <div class="stat"><b>0</b><span>emails to a guest whose cancellation arrived before the booking</span></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h3>What the service does</h3>
+      <ol class="flow">
+        <li>Checks the webhook signature, then ignores any event id it has already seen.</li>
+        <li>Keeps the newest version of each reservation by timestamp; a cancellation stays final even if the booking event arrives later.</li>
+        <li>Takes inventory (parking nights, late-checkout slot, upgrade room-nights) in one step before anything else, so a space is sold once.</li>
+        <li>Answers the guest at once and puts folio charges, PMS room changes and CRM events in an outbox with idempotency keys.</li>
+        <li>Retries after 1, 5, 15, 60 and 240 minutes, then moves the job to a dead-letter list and alerts staff. Jobs survive a restart.</li>
+      </ol>
+    </div>
+    <div class="panel"><h3>The cases, run over HTTP</h3>
+      <div class="tbl-wrap" tabindex="0" role="region" aria-label="End-to-end cases"><table class="tbl"><thead><tr><th scope="col">Case</th><th scope="col">Result</th></tr></thead><tbody>
+<tr><td>New booking: confirmation now, offer email 7 days before arrival at 10:00 Lisbon time</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Same webhook delivered 3 times: one reservation, one confirmation</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Cancellation arrives before the booking (out of order): no email, no rooms held</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Forged PMS webhook (bad signature) refused, nothing stored</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Older change after a newer one is ignored</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Guest opens the offer, books breakfast, parking and late checkout; 3 folio charges, receipt, CRM event</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Double click and 3 parallel retries of the same booking: one order, no extra charges</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Last parking space: 5 guests book at once, exactly 1 gets it</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>PMS answers 500 twice, then works: charge posted once on the third attempt</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>PMS down for good: 6 attempts over about 5 hours, then dead-letter and a staff alert</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Service restarts with charges queued: they post once after restart</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>PMS times out after charging: the retry carries the same idempotency key, so the guest pays once</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>One-click unsubscribe (POST) stops offers; a GET does nothing; receipts still go</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Dates change after parking was bought: parking moves to the new nights</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Cancellation after purchase: refunds posted, inventory released, unsent emails stopped</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Upgrade: rooms move to the new type, PMS amended, and an older PMS update does not undo it</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>Tampered or expired offer links are refused</td><td><span class="badge ok">as expected</span></td></tr>
+<tr><td>CRM events are signed and arrive once per purchase</td><td><span class="badge ok">as expected</span></td></tr>
+      </tbody></table></div>
+    </div>
+  </div>
+</div></section>
+
+<section class="block" id="timing" aria-labelledby="h-time"><div class="wrap">
+  <h2 id="h-time">Offers go out in hotel time, never at night, and stop when they should.</h2>
+  <div class="grid2">
+    <div class="panel"><h3>Default plan for a stay</h3>
+      <ul class="plain">
+        <li>Booking confirmation as soon as the booking arrives. Transactional: no unsubscribe header.</li>
+        <li>Offer email 7 days before arrival at 10:00 hotel time, or within 15 minutes for later bookings, unless check-in is less than 24 hours away.</li>
+        <li>One reminder 2 days before arrival, only if the guest neither opened the offer page nor booked.</li>
+        <li>Late checkout offer at 18:00 the evening before departure, only while a slot is free.</li>
+        <li>At most 3 offer emails per stay, none between 21:00 and 08:00, none after an unsubscribe or a cancellation.</li>
+      </ul>
+    </div>
+    <div class="panel"><h3>Checked</h3>
+      <p>10,000 random local times in Lisbon, Berlin, New York and Dubai between 2026 and 2028 convert to UTC and back exactly, including the days clocks change. On 10,000 random bookings, 0 offers fall in quiet hours and 0 arrive after check-in.</p>
+      <p>Offer emails carry <code>List-Unsubscribe</code> and <code>List-Unsubscribe-Post: List-Unsubscribe=One-Click</code>, as Gmail asks of bulk senders’ promotional mail. Only a POST unsubscribes, so link scanners that open the link do not.</p>
+      <p>Responses are counted from offer-page visits and bookings, not from opens: Apple Mail loads images on delivery, which makes open rates unreliable.</p>
+    </div>
+  </div>
+</div></section>
+
+<section class="block" id="build" aria-labelledby="h-build"><div class="wrap">
+  <h2 id="h-build">How it fits with the hotel’s systems.</h2>
+  <p class="lede">A small service in the middle, with the PMS as the source of truth. Automation platforms and the CRM receive signed events, so the team can add steps without touching the core.</p>
+  <div class="arch">
+    <div class="box core"><h4>Upsell service (Node.js, the engine in this demo)</h4><p>Webhook intake with signature check and de-duplication, offer rules and prices, message plans in hotel time, signed guest links, inventory counters, outbox with retries and dead-letter list, operations console.</p></div>
+    <div class="box"><h4>PMS</h4><p>Apaleo, Mews, Cloudbeds or similar: booking webhooks in; folio charges, room-type changes and availability reads out, each with an idempotency key where the PMS supports one.</p></div>
+    <div class="box"><h4>Email</h4><p>Postmark, SendGrid or Amazon SES with SPF, DKIM and DMARC on the hotel’s domain; one-click unsubscribe on offers, none on confirmations.</p></div>
+    <div class="box"><h4>Guest offer page</h4><p>Signed link that expires at checkout, shown in the guest’s language, availability checked again on open and on booking.</p></div>
+    <div class="box"><h4>CRM and automation platforms</h4><p>Signed webhooks for purchases and unsubscribes, ready for HubSpot, a hotel CRM, or a Make, Zapier or n8n scenario.</p></div>
+    <div class="box"><h4>Database</h4><p>SQLite in this demo, Postgres for a hosted version: the same one-step inventory updates and job claims.</p></div>
+    <div class="box"><h4>Operations console</h4><p>Per-guest reasons, timeline, inventory, outbox with retries, results and editable rules.</p></div>
+  </div>
+</div></section>
+
+<section class="block" id="measured" aria-labelledby="h-meas"><div class="wrap">
+  <h2 id="h-meas">Measured</h2>
+  <p class="lede">Every number on this page comes from the test runs in the project kit.</p>
+  <div class="tbl-wrap" tabindex="0" role="region" aria-label="Measured results"><table class="tbl"><thead><tr><th scope="col">Check</th><th scope="col">Result</th></tr></thead><tbody>
+<tr><td>Engine tests (time zones, schedule, offer rules, counters, signed links, emails, 30-day run)</td><td>34 of 34 pass on Node v22.23.4</td></tr>
+<tr><td>End-to-end over HTTP: the service, a SQLite file and local PMS, email and CRM servers</td><td>18 of 18 cases behave as expected; 0 duplicate folio charges</td></tr>
+<tr><td>Same booking webhook delivered 3 times</td><td>1 reservation, 1 confirmation email</td></tr>
+<tr><td>Cancellation delivered before the booking</td><td>0 emails sent, 0 rooms held</td></tr>
+<tr><td>Last parking space, 5 guests booking at once</td><td>1 booked, capacity 10 never exceeded; a check-then-book version sold it 5 times</td></tr>
+<tr><td>PMS times out after posting a charge, then the job retries</td><td>1 charge with the idempotency key; 2 if the PMS ignored the key</td></tr>
+<tr><td>PMS down for good</td><td>6 attempts over about 5 hours, then dead-letter list and a staff alert; no charge lost or doubled after a restart</td></tr>
+<tr><td>Local send times, 10,000 random times in 4 zones over 2026 to 2028</td><td>10,000 of 10,000 exact, including daylight-saving days</td></tr>
+<tr><td>Message plans for 10,000 random bookings</td><td>0 offers in quiet hours; 0 after check-in; pre-arrival offers at 10:00 local in 8,693 of 8,693 cases</td></tr>
+<tr><td>30 simulated days of a 42-room hotel with random guest replies</td><td>392 reservations, 1,462 emails, 422 extras booked; 0 parking nights or late slots oversold; every extra charged once</td></tr>
+<tr><td>Booking webhook processing</td><td>0.2 ms per reservation in memory</td></tr>
+<tr><td>Demo page in Chromium (axe at 1360 px and 390 px, every local link, autoplays under the page CSP, clicks and keyboard)</td><td>0 accessibility violations on 12 views; 0 of 10 views overflow; 0 of 27 links broken; 4 of 4 autoplays and 9 of 9 interaction checks as expected; 0 console errors</td></tr>
+  </tbody></table></div>
+  <h3 id="not-measured">Not measured</h3>
+  <ul class="plain"><li>A real PMS. Webhooks follow Apaleo’s documented behaviour (repeats, any order), but no Apaleo, Mews or Cloudbeds account was used; folio charges and room changes go to a local stand-in.</li>
+<li>Real email delivery: SPF, DKIM and DMARC set-up, inbox placement and spam rates. The demo writes the headers; it sends nothing.</li>
+<li>Payments by card. Extras go on the guest’s bill at checkout; taking a card payment up front would add a payment provider.</li>
+<li>Guest acceptance rates. The 30-day run uses random replies to test the plumbing, not to forecast revenue.</li>
+<li>Load beyond one hotel, and a multi-server set-up on Postgres. The SQLite version locks with transactions; a hosted version would use the database the same way.</li>
+<li>Prices, capacities and email wording, which are placeholders for the hotel to set; translations were not reviewed by native speakers.</li></ul>
+</div></section>
+</main>
+<footer><div class="wrap">
+  <p>Prepared by Santiago. Hotel Meridiana, its guests and its prices are invented for this demo.</p>
+  <p>Fonts: Newsreader and Schibsted Grotesk (SIL Open Font License).</p>
+</div></footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

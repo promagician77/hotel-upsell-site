@@ -1,0 +1,7 @@
+{
+  "name": "hotel-upsell-desk-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static demo of hotel upsell automation: PMS webhooks, offer emails, offer page, folio charges with retries.",
+  "license": "UNLICENSED"
+}
